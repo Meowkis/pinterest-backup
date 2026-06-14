@@ -16,11 +16,15 @@ WORKDIR /app
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-RUN npx playwright install --with-deps chromium \
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && npx playwright install --with-deps chromium \
     && mkdir -p /data \
-    && chown -R node:node /app /data /ms-playwright
+    && chown -R node:node /app /data /ms-playwright \
+    && chmod 755 /usr/local/bin/docker-entrypoint.sh
 
-USER node
 VOLUME ["/data"]
-ENTRYPOINT ["node", "dist/cli.js"]
+ENTRYPOINT ["docker-entrypoint.sh", "node", "dist/cli.js"]
 CMD ["daemon"]

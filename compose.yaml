@@ -9,9 +9,12 @@ services:
       PINTEREST_PASSWORD_FILE: /run/secrets/pinterest_password
       PINTEREST_USERNAME: ${PINTEREST_USERNAME:-}
       PINTEREST_HEADLESS: ${PINTEREST_HEADLESS:-true}
+      AUTH_TIMEOUT_SECONDS: ${AUTH_TIMEOUT_SECONDS:-60}
       SYNC_INTERVAL_HOURS: ${SYNC_INTERVAL_HOURS:-3}
       SYNC_ON_START: ${SYNC_ON_START:-true}
       DOWNLOAD_CONCURRENCY: ${DOWNLOAD_CONCURRENCY:-3}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       TZ: ${TZ:-Europe/Moscow}
     secrets:
       - pinterest_password

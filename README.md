@@ -25,6 +25,15 @@
    ```
 
 2. Укажите `PINTEREST_EMAIL` в `.env`. `PINTEREST_USERNAME` обычно можно оставить пустым.
+   Если UID/GID пользователя сервера отличаются от `1000`, укажите их в `.env`:
+
+   ```bash
+   id -u
+   id -g
+   ```
+
+   Полученные значения запишите как `PUID` и `PGID`. Entry point контейнера исправляет права
+   bind mount `./data`, после чего запускает Node.js без root-привилегий.
 
 3. Соберите образ и проверьте вход:
 
@@ -32,6 +41,25 @@
    docker compose build
    docker compose run --rm pinterest-backup auth
    ```
+
+   На headless-сервере удобнее импортировать cookies из уже авторизованного браузера. Экспортируйте
+   cookies только для `pinterest.com` в JSON или Netscape-формате и передайте файл в stdin:
+
+   ```bash
+   cat pinterest-cookies.json | docker compose run --rm -T pinterest-backup import-cookies -
+   ```
+
+   Можно передать экспорт с локального компьютера сразу через SSH, не сохраняя его отдельным
+   файлом на сервере:
+
+   ```bash
+   cat pinterest-cookies.json | ssh user@server \
+     'cd /path/to/pinterest-backup && docker compose run --rm -T pinterest-backup import-cookies -'
+   ```
+
+   Поддерживаются JSON-экспорты расширений вроде Cookie-Editor, Netscape `cookies.txt` и строка
+   `Cookie:` из запроса в DevTools. Импорт оставляет только Pinterest cookies и требует `_auth=1`
+   вместе с `_pinterest_sess`.
 
 4. Запустите сервис:
 

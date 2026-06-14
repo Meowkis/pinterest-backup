@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts daemon",
     "auth": "tsx src/cli.ts auth",
+    "import-cookies": "tsx src/cli.ts import-cookies",
     "sync": "tsx src/cli.ts sync",
     "start": "node dist/cli.js daemon",
     "test": "node --import tsx --test test/**/*.test.ts",
