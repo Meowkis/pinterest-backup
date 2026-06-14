@@ -79,13 +79,17 @@ export class PinterestClient {
   }
 
   private async listBoardsPage(username: string, bookmark: string | null): Promise<PageResult<PinterestBoard>> {
-    const raw = await this.resource("BoardsResource", `/${username}/`, {
+    const raw = await this.resource("BoardsResource", `/${username}/_saved/`, {
       username,
-      page_size: 250,
+      page_size: 25,
       privacy_filter: "all",
       sort: "last_pinned_to",
       field_set_key: "profile_grid_item",
       filter_stories: false,
+      group_by: "mix_public_private",
+      include_archived: true,
+      redux_normalize_feed: true,
+      filter_all_pins: false,
       ...(bookmark ? { bookmarks: [bookmark] } : {}),
     });
     return parseBoardsPage(raw);
@@ -96,12 +100,13 @@ export class PinterestClient {
       ? new URL(board.url).pathname
       : board.url || `/${this.requireUsername()}/${board.name}/`;
     const raw = await this.resource("BoardFeedResource", sourceUrl, {
+      add_vase: false,
       board_id: board.id,
-      board_url: sourceUrl,
-      page_size: 50,
       field_set_key: "react_grid_pin",
-      filter_section_pins: false,
-      redux_normalize_feed: true,
+      filter_section_pins: true,
+      is_react: true,
+      prepend: false,
+      page_size: 25,
       ...(bookmark ? { bookmarks: [bookmark] } : {}),
     });
     return parsePinsPage(raw, board.id);
@@ -250,12 +255,23 @@ export class PinterestClient {
 
   private async discoverUsername(): Promise<string> {
     const page = this.requirePage();
-    await page.goto(`${BASE_URL}/me/`, { waitUntil: "domcontentloaded" });
-    const segment = new URL(page.url()).pathname.split("/").filter(Boolean)[0];
-    if (!segment || ["login", "me"].includes(segment)) {
-      throw new Error("Could not discover Pinterest username; set PINTEREST_USERNAME explicitly");
+    await waitForNavigationToSettle(page);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const origin = pinterestOrigin(page.url());
+      try {
+        await page.goto(`${origin}/me/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      } catch (error) {
+        if (!isInterruptedNavigation(error)) throw error;
+        await waitForNavigationToSettle(page);
+      }
+
+      await waitForNavigationToSettle(page);
+      const segment = usernameFromUrl(page.url());
+      if (segment) return segment;
     }
-    return segment;
+
+    throw new Error("Could not discover Pinterest username; set PINTEREST_USERNAME explicitly");
   }
 
   private async saveSession(): Promise<void> {
@@ -325,4 +341,36 @@ function stringValue(value: unknown): string | null {
 
 function scalar(value: unknown): string | number | null {
   return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+async function waitForNavigationToSettle(page: Page): Promise<void> {
+  await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined);
+  await page.waitForTimeout(1_000);
+}
+
+function pinterestOrigin(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "pinterest.com" || parsed.hostname.endsWith(".pinterest.com")) {
+      return parsed.origin;
+    }
+  } catch {
+    // Fall back to the canonical domain below.
+  }
+  return BASE_URL;
+}
+
+function usernameFromUrl(url: string): string | null {
+  const segment = new URL(url).pathname.split("/").filter(Boolean)[0];
+  if (!segment) return null;
+  const reserved = new Set([
+    "about", "business", "categories", "discover", "email", "explore", "help", "ideas",
+    "login", "me", "oauth", "password", "pin", "search", "settings", "signup", "today",
+    "topics", "tv", "videos",
+  ]);
+  return reserved.has(segment.toLowerCase()) ? null : segment;
+}
+
+function isInterruptedNavigation(error: unknown): boolean {
+  return error instanceof Error && /interrupted by another navigation|ERR_ABORTED/i.test(error.message);
 }
