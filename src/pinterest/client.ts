@@ -1,5 +1,6 @@
-import { chmod, mkdir, stat } from "node:fs/promises";
-import type { Browser, BrowserContext, Page } from "playwright";
+import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { Browser, BrowserContext, Page, Response } from "playwright";
 import { chromium } from "playwright";
 import type { Config } from "../config.js";
 import { logger } from "../logger.js";
@@ -7,6 +8,7 @@ import type { PageResult, PinterestBoard, PinterestPin } from "../types.js";
 import { parseBoardsPage, parsePinsPage } from "./parser.js";
 
 const BASE_URL = "https://www.pinterest.com";
+const AUTH_COOKIE = "_auth";
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -132,7 +134,7 @@ export class PinterestClient {
   private async isAuthenticated(): Promise<boolean> {
     const page = this.requirePage();
     await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-    return !page.url().includes("/login") && !await page.locator('input[type="password"]').isVisible().catch(() => false);
+    return this.hasAuthCookie();
   }
 
   private async login(): Promise<void> {
@@ -148,16 +150,102 @@ export class PinterestClient {
     await email.waitFor({ state: "visible", timeout: 20_000 });
     await email.fill(this.config.email);
     await password.fill(this.config.password);
-    await page.locator('button[type="submit"]').first().click();
-    await page.waitForTimeout(5_000);
 
-    if (page.url().includes("/login") || await password.isVisible().catch(() => false)) {
-      const message = await page.locator('[role="alert"]').allTextContents().catch(() => []);
-      throw new Error(`Pinterest login did not complete${message.length ? `: ${message.join(" ")}` : "; check credentials or complete a challenge manually"}`);
+    const loginResponse = page.waitForResponse(
+      (response) => response.request().method() === "POST"
+        && response.url().includes("/resource/UserSessionResource/create/"),
+      { timeout: this.config.authTimeoutMs },
+    ).catch(() => null);
+
+    await page.locator('button[type="submit"]').first().click();
+    const response = await loginResponse;
+    const responseSummary = await summarizeLoginResponse(response);
+
+    const shouldWaitForInteractiveCompletion = !this.config.headless
+      || responseSummary.status === "success"
+      || responseSummary.status === null;
+    if (shouldWaitForInteractiveCompletion && await this.waitForAuthCookie(this.config.authTimeoutMs)) return;
+
+    await page.waitForTimeout(1_000);
+
+    const challenge = await this.detectChallenge(responseSummary);
+    const diagnostics = await this.saveAuthDiagnostics(responseSummary, challenge);
+    if (challenge) {
+      throw new Error(
+        `Pinterest requires ${challenge}; it must be completed in a normal interactive browser. Diagnostics: ${diagnostics}`,
+      );
     }
-    if (/challenge|checkpoint|two_factor/i.test(page.url())) {
-      throw new Error("Pinterest requires a challenge or 2FA; run auth with PINTEREST_HEADLESS=false on a machine with a display");
+
+    const message = responseSummary.message || await this.visibleLoginError();
+    throw new Error(
+      `Pinterest login failed${message ? `: ${message}` : " without an error message"}. Diagnostics: ${diagnostics}`,
+    );
+  }
+
+  private async hasAuthCookie(): Promise<boolean> {
+    if (!this.context) return false;
+    const cookies = await this.context.cookies(BASE_URL);
+    return cookies.some((cookie) => cookie.name === AUTH_COOKIE && cookie.value === "1");
+  }
+
+  private async waitForAuthCookie(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.hasAuthCookie()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
+    return false;
+  }
+
+  private async detectChallenge(summary: LoginResponseSummary): Promise<string | null> {
+    const page = this.requirePage();
+    if (summary.challenge === "mfa" || /mfa|two.factor/i.test(page.url())) return "two-factor authentication";
+    if (summary.challenge === "bot") return "an anti-bot challenge";
+
+    const frameUrls = page.frames().map((frame) => frame.url()).join(" ");
+    const iframeSources = await page.locator("iframe").evaluateAll((frames) => frames
+      .map((frame) => frame.getAttribute("src") ?? "")
+      .join(" ")).catch(() => "");
+    if (/arkose|recaptcha|challenge|checkpoint/i.test(`${page.url()} ${frameUrls} ${iframeSources}`)) {
+      return "an anti-bot challenge";
+    }
+    return null;
+  }
+
+  private async visibleLoginError(): Promise<string> {
+    const page = this.requirePage();
+    const selectors = [
+      '[role="alert"]',
+      '[data-test-id*="error"]',
+      'input[name="password"] ~ div',
+    ];
+    const messages: string[] = [];
+    for (const selector of selectors) {
+      const values = await page.locator(selector).allTextContents().catch(() => []);
+      messages.push(...values.map((value) => value.trim()).filter(Boolean));
+    }
+    return [...new Set(messages)].join(" ").slice(0, 1000);
+  }
+
+  private async saveAuthDiagnostics(summary: LoginResponseSummary, challenge: string | null): Promise<string> {
+    const page = this.requirePage();
+    const directory = join(this.config.dataDir, "auth-debug");
+    await mkdir(directory, { recursive: true });
+    const stamp = new Date().toISOString().replaceAll(":", "-");
+    const screenshotPath = join(directory, `${stamp}.png`);
+    const jsonPath = join(directory, `${stamp}.json`);
+
+    await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+    await writeFile(jsonPath, JSON.stringify({
+      time: new Date().toISOString(),
+      url: page.url(),
+      title: await page.title().catch(() => ""),
+      challenge,
+      response: summary,
+      visibleError: await this.visibleLoginError(),
+    }, null, 2), { mode: 0o600 });
+    await chmod(screenshotPath, 0o600).catch(() => undefined);
+    return directory;
   }
 
   private async discoverUsername(): Promise<string> {
@@ -185,4 +273,56 @@ export class PinterestClient {
     if (!this.username) throw new Error("Pinterest username is not available");
     return this.username;
   }
+}
+
+interface LoginResponseSummary {
+  httpStatus: number | null;
+  status: string | null;
+  code: string | number | null;
+  message: string | null;
+  challenge: "bot" | "mfa" | null;
+}
+
+async function summarizeLoginResponse(response: Response | null): Promise<LoginResponseSummary> {
+  if (!response) {
+    return { httpStatus: null, status: null, code: null, message: null, challenge: null };
+  }
+
+  const body = await response.json().catch(() => null) as unknown;
+  if (!isRecord(body)) {
+    return { httpStatus: response.status(), status: null, code: null, message: null, challenge: null };
+  }
+
+  const resource = isRecord(body.resource_response) ? body.resource_response : body;
+  const data = isRecord(resource.data) ? resource.data : null;
+  const error = isRecord(resource.error) ? resource.error : null;
+  const code = scalar(resource.error_code) ?? scalar(resource.code) ?? scalar(error?.code) ?? null;
+  const message = stringValue(resource.message)
+    ?? stringValue(resource.error_message)
+    ?? stringValue(error?.message)
+    ?? null;
+  const serialized = JSON.stringify({ status: resource.status, code, message, data });
+  const challenge = /mfa|two.factor/i.test(serialized)
+    ? "mfa"
+    : /bot.detection|arkose|recaptcha|challenge.required/i.test(serialized) ? "bot" : null;
+
+  return {
+    httpStatus: response.status(),
+    status: stringValue(resource.status),
+    code,
+    message,
+    challenge,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 1000) : null;
+}
+
+function scalar(value: unknown): string | number | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
 }

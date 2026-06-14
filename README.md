@@ -71,3 +71,18 @@ npm run typecheck
 
 Для диагностики входа с видимым браузером установите `PINTEREST_HEADLESS=false` и запускайте
 `npm run auth` в графической сессии. Если Pinterest требует CAPTCHA или 2FA, их нужно пройти вручную.
+
+Например, первоначальную авторизацию можно выполнить на хосте, сохранив сессию сразу в volume
+контейнера:
+
+```bash
+PINTEREST_HEADLESS=false \
+AUTH_TIMEOUT_SECONDS=180 \
+npm run auth
+```
+
+CLI автоматически загружает локальный `.env`, включая `PINTEREST_EMAIL` и путь
+`PINTEREST_PASSWORD_FILE`. После входа `docker compose up -d` использует созданный
+`data/session.json`, и credentials для каждой синхронизации уже не нужны. При неудачном входе
+безопасная сводка ответа и screenshot сохраняются в `data/auth-debug/`; пароль и cookies в
+диагностический JSON не записываются.

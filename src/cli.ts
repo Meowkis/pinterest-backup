@@ -1,9 +1,13 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { loadEnvFile } from "node:process";
 import { loadConfig } from "./config.js";
 import { ArchiveDatabase } from "./database.js";
 import { logger } from "./logger.js";
 import { PinterestClient } from "./pinterest/client.js";
 import { runSync } from "./sync.js";
+
+if (existsSync(".env")) loadEnvFile(".env");
 
 async function authenticate(): Promise<void> {
   const config = loadConfig();

@@ -9,6 +9,7 @@ export interface Config {
   password: string | null;
   username: string | null;
   headless: boolean;
+  authTimeoutMs: number;
   syncIntervalMs: number;
   syncOnStart: boolean;
   downloadConcurrency: number;
@@ -48,6 +49,7 @@ export function loadConfig(): Config {
     password: optionalSecret("PINTEREST_PASSWORD"),
     username: optionalSecret("PINTEREST_USERNAME"),
     headless: booleanValue("PINTEREST_HEADLESS", true),
+    authTimeoutMs: positiveNumber("AUTH_TIMEOUT_SECONDS", 60) * 1000,
     syncIntervalMs: positiveNumber("SYNC_INTERVAL_HOURS", 3) * 60 * 60 * 1000,
     syncOnStart: booleanValue("SYNC_ON_START", true),
     downloadConcurrency: Math.floor(positiveNumber("DOWNLOAD_CONCURRENCY", 3)),
