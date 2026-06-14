@@ -1,0 +1,23 @@
+services:
+  pinterest-backup:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      DATA_DIR: /data
+      PINTEREST_EMAIL: ${PINTEREST_EMAIL}
+      PINTEREST_PASSWORD_FILE: /run/secrets/pinterest_password
+      PINTEREST_USERNAME: ${PINTEREST_USERNAME:-}
+      PINTEREST_HEADLESS: ${PINTEREST_HEADLESS:-true}
+      SYNC_INTERVAL_HOURS: ${SYNC_INTERVAL_HOURS:-3}
+      SYNC_ON_START: ${SYNC_ON_START:-true}
+      DOWNLOAD_CONCURRENCY: ${DOWNLOAD_CONCURRENCY:-3}
+      TZ: ${TZ:-Europe/Moscow}
+    secrets:
+      - pinterest_password
+    volumes:
+      - ./data:/data
+
+secrets:
+  pinterest_password:
+    file: ./secrets/pinterest_password.txt
